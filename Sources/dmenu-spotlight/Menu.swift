@@ -10,7 +10,8 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
     private let bottomPadding: CGFloat = 8
     /// Transparent space between the background and the window's edges. While
     /// the window is key, Liquid Glass draws its own shadow up to about 48
-    /// points out, and the window clips anything drawn past its edges.
+    /// points out, and the window clips anything drawn past its edges. The
+    /// opening scale and the closing blur also spill into it.
     private let margin: CGFloat = 48
 
     private let items: [String]
@@ -19,8 +20,11 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
     private var matches: [String] = []
     /// Where the window's top-left corner goes. The window grows downward from it.
     private var topLeft = NSPoint.zero
+    /// Set when the closing animation starts, so later picks and cancels are ignored.
+    private var isClosing = false
 
     private let panel = Panel(contentRect: .zero, styleMask: .nonactivatingPanel, backing: .buffered, defer: false)
+    private let container = Container()
     private let icon = NSImageView()
     private let field = NSTextField()
     private let table = NSTableView()
@@ -94,8 +98,8 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
 
         // Glass draws its own shadow into the margin. The blur needs the window's.
         panel.hasShadow = background is NSVisualEffectView
-        let container = Container()
-        container.onMarginClick = { onFinish(nil) }
+        container.wantsLayer = true
+        container.onMarginClick = { [unowned self] in close(choosing: nil) }
         container.addSubview(background)
         panel.contentView = container
     }
@@ -108,8 +112,56 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
         topLeft = NSPoint(x: area.midX - width / 2, y: area.maxY - area.height * 0.2)
 
         update()
+        panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
+
+        // Fade in while shrinking from 8% too big, with timings measured from a
+        // recording of Spotlight. Reduce motion leaves only the fade. The scale
+        // pivots on the layer's corner, so move the center there and back.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let center = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
+        var start = CATransform3DMakeTranslation(center.x, center.y, 0)
+        start = CATransform3DScale(start, 1.08, 1.08, 1)
+        start = CATransform3DTranslate(start, -center.x, -center.y, 0)
+        let shrink = CABasicAnimation(keyPath: "sublayerTransform")
+        shrink.fromValue = start
+        shrink.duration = 0.12
+        shrink.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        container.layer?.add(shrink, forKey: nil)
+    }
+
+    /// Blurs and fades the window out like Spotlight, then calls `onFinish`.
+    /// Reduce motion leaves only the fade. Only the first call counts, so a
+    /// click outside the window during the animation can't turn a pick into a cancel.
+    private func close(choosing choice: String?) {
+        guard !isClosing else { return }
+        isClosing = true
+
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let blur = CIFilter(name: "CIGaussianBlur", parameters: [kCIInputRadiusKey: 10])!
+            blur.name = "blur"
+            container.layerUsesCoreImageFilters = true
+            container.contentFilters = [blur]
+            let animation = CABasicAnimation(keyPath: "filters.blur.inputRadius")
+            animation.fromValue = 0
+            animation.duration = 0.08
+            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            container.layer?.add(animation, forKey: nil)
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.08
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().alphaValue = 0
+        } completionHandler: {
+            // AppKit runs the handler on the main thread.
+            MainActor.assumeIsolated { self.onFinish(choice) }
+        }
     }
 
     /// Refilters the list, selects the first match, and resizes the window to fit.
@@ -156,14 +208,14 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
             select(row + 1)
         case #selector(NSResponder.insertNewline(_:)):
             let shift = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
-            onFinish(shift || row < 0 ? field.stringValue : matches[row])
+            close(choosing: shift || row < 0 ? field.stringValue : matches[row])
         case #selector(NSResponder.insertTab(_:)):
             guard row >= 0 else { break }
             textView.string = matches[row]
             textView.moveToEndOfDocument(nil)
             update()
         case #selector(NSResponder.cancelOperation(_:)):
-            onFinish(nil)
+            close(choosing: nil)
         default:
             return false
         }
@@ -172,12 +224,12 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
 
     @objc private func pickClickedRow() {
         guard table.clickedRow >= 0 else { return }
-        onFinish(matches[table.clickedRow])
+        close(choosing: matches[table.clickedRow])
     }
 
     /// Clicking outside the window cancels, as in Spotlight.
     func windowDidResignKey(_ notification: Notification) {
-        onFinish(nil)
+        close(choosing: nil)
     }
 
     // MARK: Table
