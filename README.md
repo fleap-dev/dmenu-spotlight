@@ -2,21 +2,13 @@
 
 A [dmenu](https://tools.suckless.org/dmenu/) for macOS that looks like Spotlight.
 
+![dmenu-spotlight on a sunset wallpaper. The query "ma" filters a list of apps down to Mail, Maps, Image Playground and Time Machine, with Mail selected.](docs/screenshot.png)
+
 dmenu-spotlight reads lines from stdin, shows them in a Spotlight-style window, and prints the line you pick to stdout. It uses dmenu's command-line interface, so scripts written for dmenu only need the command name changed. If you symlink it as `dmenu`, they need no change at all.
 
 ```bash
 printf "%s\n" "Option 1" "Option 2" "Option 3" | dmenu-spotlight
 ```
-
-## Why
-
-On Linux, dmenu, rofi, and wofi already do this job well. On macOS the closest option is [dmenu-mac](https://github.com/oNaiPs/dmenu-mac), and it has problems:
-
-- Its window does not stay above other windows.
-- Switching Spaces while it is open makes the window glitch.
-- It doesn't look or behave like a Mac app.
-
-dmenu-spotlight is a small AppKit program written to fix these. [Window behavior](#window-behavior) lists what it does differently.
 
 ## Install
 
@@ -86,7 +78,7 @@ name=$(dmenu-spotlight -p "File name" < /dev/null)
 
 ## Window behavior
 
-- The window opens centered in the upper third of the screen that has the mouse pointer, where Spotlight opens.
+- The window opens centered in the upper third of the screen that has the mouse pointer.
 - It stays above all other windows, full-screen apps included.
 - It stays visible and keeps keyboard focus when you switch Spaces.
 - It shows no Dock icon and leaves the menu bar alone. The app you were using stays active, and focus goes back to it when the window closes.

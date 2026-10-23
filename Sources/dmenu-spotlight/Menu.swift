@@ -95,6 +95,8 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
         scrollView.documentView = table
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
+        // With a mouse connected, scroll bars stay visible. Hide them when every row fits.
+        scrollView.autohidesScrollers = true
 
         // Glass draws its own shadow into the margin. The blur needs the window's.
         panel.hasShadow = background is NSVisualEffectView
