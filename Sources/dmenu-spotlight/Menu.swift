@@ -8,6 +8,10 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
     private let barHeight: CGFloat = 56
     private let rowHeight: CGFloat = 34
     private let bottomPadding: CGFloat = 8
+    /// Transparent space between the background and the window's edges. While
+    /// the window is key, Liquid Glass draws its own shadow up to about 48
+    /// points out, and the window clips anything drawn past its edges.
+    private let margin: CGFloat = 48
 
     private let items: [String]
     private let options: Options
@@ -22,6 +26,29 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
     private let table = NSTableView()
     private let scrollView = NSScrollView()
 
+    /// The rounded backdrop that holds the search bar and the list: Liquid
+    /// Glass where available, the system blur otherwise.
+    private lazy var background: NSView = {
+        let content = NSView()
+        content.autoresizingMask = [.width, .height]
+        for view in [icon, field, scrollView] { content.addSubview(view) }
+
+        if #available(macOS 26, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = barHeight / 2
+            glass.contentView = content
+            return glass
+        }
+        let blur = NSVisualEffectView()
+        blur.material = .popover
+        blur.state = .active
+        blur.wantsLayer = true
+        blur.layer?.cornerRadius = barHeight / 2
+        blur.layer?.masksToBounds = true
+        blur.addSubview(content)
+        return blur
+    }()
+
     init(items: [String], options: Options, onFinish: @escaping (String?) -> Void) {
         self.items = items
         self.options = options
@@ -34,7 +61,6 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
         panel.delegate = self
 
         icon.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
@@ -66,26 +92,12 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
 
-        let content = NSView()
-        content.autoresizingMask = [.width, .height]
-        for view in [icon, field, scrollView] { content.addSubview(view) }
-
-        // Liquid Glass where available, the system blur otherwise.
-        if #available(macOS 26, *) {
-            let glass = NSGlassEffectView()
-            glass.cornerRadius = barHeight / 2
-            glass.contentView = content
-            panel.contentView = glass
-        } else {
-            let blur = NSVisualEffectView()
-            blur.material = .popover
-            blur.state = .active
-            blur.wantsLayer = true
-            blur.layer?.cornerRadius = barHeight / 2
-            blur.layer?.masksToBounds = true
-            blur.addSubview(content)
-            panel.contentView = blur
-        }
+        // Glass draws its own shadow into the margin. The blur needs the window's.
+        panel.hasShadow = background is NSVisualEffectView
+        let container = Container()
+        container.onMarginClick = { onFinish(nil) }
+        container.addSubview(background)
+        panel.contentView = container
     }
 
     /// Opens the window on the screen with the mouse pointer, where Spotlight opens.
@@ -109,7 +121,9 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
         let rows = min(matches.count, options.lines)
         let listHeight = CGFloat(rows) * rowHeight
         let height = barHeight + (rows > 0 ? listHeight + bottomPadding : 0)
-        panel.setFrame(NSRect(x: topLeft.x, y: topLeft.y - height, width: width, height: height), display: true)
+        let frame = NSRect(x: topLeft.x, y: topLeft.y - height, width: width, height: height)
+        panel.setFrame(frame.insetBy(dx: -margin, dy: -margin), display: true)
+        background.frame = NSRect(x: margin, y: margin, width: width, height: height)
 
         let fieldHeight = field.intrinsicContentSize.height
         icon.frame = NSRect(x: 20, y: height - (barHeight + 24) / 2, width: 24, height: 24)
@@ -203,6 +217,18 @@ final class Menu: NSObject, NSTextFieldDelegate, NSTableViewDataSource, NSTableV
 /// A borderless panel that can still take keyboard input.
 private final class Panel: NSPanel {
     override var canBecomeKey: Bool { true }
+}
+
+/// The window's transparent content view. It holds the background, and a click
+/// in the margin around it cancels, like a click outside the window.
+private final class Container: NSView {
+    var onMarginClick: () -> Void = {}
+
+    override func mouseDown(with event: NSEvent) {
+        // Clicks that the background's views don't handle bubble up here too.
+        let point = convert(event.locationInWindow, from: nil)
+        if !subviews.contains(where: { $0.frame.contains(point) }) { onMarginClick() }
+    }
 }
 
 /// Draws the selected row as a rounded accent-colored bar. Claiming to be
